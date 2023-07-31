@@ -7,12 +7,12 @@ import plotly.express as px
 from itertools import cycle
 
 
-def distance(a: ty.List[int], b: ty.List[int], pow=1) -> int:
+def distance(a: ty.List[int], b: ty.List[int], power=1) -> int:
     """
     Calculate the distance between two alleles.
-    pow of 1 is manhattan distance, pow of 2 is euclidean distance.
+    power of 1 is manhattan distance, power of 2 is euclidean distance.
     """
-    return sum(abs(a[i] - b[i])**pow for i in range(len(a)))**(1/pow)
+    return sum(abs(a[i] - b[i])**power for i in range(len(a)))**(1/power)
 
 def get_tag(v: cyvcf2.Variant, tag: str) -> ty.List[int]:
     if tag == "GT":
@@ -64,8 +64,19 @@ def generate_combinations(mom: ty.List[ty.List[int]], dad: ty.List[ty.List[int]]
     return result
 
 
+def min_distance(mom_mc: ty.List[ty.List[int]], dad_mc: ty.List[ty.List[int]],
+                kid_mc: ty.List[int], power: int) -> ty.Tuple[int, ty.List[int]]:
+    """
+    >>> min_distance([[6021, 15812], [6032, 15805], [5828.002823531628, 15366.006873607635]], [[3874, 4398], [3886, 4408], [3730.9991244077682, 4270.000632762909]], [4398, 15808, 4408, 15805, 4270.000632762909, 15317.999767303467], power = 1)
+    (52.0071063041687, [15812, 4398, 15805, 4408, 15366.006873607635, 4270.000632762909])
+    """
+    parent_mcs = generate_combinations(mom_mc, dad_mc)
+    dists = [(distance(parent_mc, kid_mc, power=power), parent_mc) for parent_mc in parent_mcs]
+    result = min(dists, key=lambda x: x[0])
+    return result
+
 def find_distance(mom: cyvcf2.Variant, dad: cyvcf2.Variant, kid: cyvcf2.Variant,
-                  pow: int, tags: ty.List[str]) -> ty.Tuple[int, ty.List[int]]: #, ty.List[int]]:
+                  power: int, tags: ty.List[str]) -> ty.Tuple[int, ty.List[int]]: #, ty.List[int]]:
     mom_mc = []
     dad_mc = []
     kid_mc = []
@@ -76,14 +87,8 @@ def find_distance(mom: cyvcf2.Variant, dad: cyvcf2.Variant, kid: cyvcf2.Variant,
             kid_mc.extend(get_norm_tag(kid, tag))
         except ValueError:
             raise ValueError
-    parent_mcs = generate_combinations(mom_mc, dad_mc)
-    dists = [(distance(parent_mc, kid_mc, pow=pow), parent_mc) for parent_mc in parent_mcs]
-    result = min(dists, key=lambda x: x[0])
 
-    #parent_ht = result[1]
-    #parent_i = [mom_mc.index(parent_ht[0]), dad_mc.index(parent_ht[1])]
-
-    return result
+    return min_distance(mom_mc, dad_mc, kid_mc, power = power)
 
 def vmc_fmt(variant: cyvcf2.Variant, tag: str) -> str:
     """
@@ -106,14 +111,14 @@ def mc_fmt(mc: ty.List[int]) -> str:
     return f'{",".join(str(x) for x in mc)}'
 
 def main(mom_vcf: pathlib.Path, dad_vcf: pathlib.Path, kid_vcfs:
-         ty.List[pathlib.Path], *, pow: int = 1, output_prefix: str = "trgt-mc-",
+         ty.List[pathlib.Path], *, power: int = 1, output_prefix: str = "trgt-mc-",
          dist_tags: ty.List[str] = ["MC", "AL", "AP"], extra_tags: ty.List[str] = ["SD"],
          exclude_chroms: ty.List[str] = ['chrX', 'chrY']):
     """
     :param mom_vcf: Path to the maternal TRGT VCF file.
     :param dad_vcf: Path to the paternal TRGT VCF file.
     :param kid_vcfs: List of paths to one or more child TRGT VCF files.
-    :param pow: Power to use for distance calculation. 1 is manhattan distance, 2 is euclidean distance.
+    :param power: Power to use for distance calculation. 1 is manhattan distance, 2 is euclidean distance.
     :param output_prefix: prefix for output files.
     :param dist_tags: VCF format field used for lengths.
     :param exclude_chroms: chromosomes to exclude.
@@ -141,14 +146,14 @@ def main(mom_vcf: pathlib.Path, dad_vcf: pathlib.Path, kid_vcfs:
                 assert (mom.POS == kid.POS) and mom.CHROM == kid.CHROM \
                     and mom.REF == kid.REF, (mom.POS, kid.POS, mom.REF, kid.REF)
             try:
-                d, parental_ht = find_distance(mom, dad, kid, pow, dist_tags)
+                d, parental_ht = find_distance(mom, dad, kid, power, dist_tags)
             except ValueError:
                 d = -1
                 parental_ht = [-1, -1]
             dists.append(d)
             motifs = kid.INFO.get('MOTIFS')
 
-            line = f'{mom.CHROM}:{mom.POS}:{mom.REF}:{"".join(mom.ALT) or "."}\t{kid_ids[i]}\t'
+            line = f'{mom.CHROM}:{mom.POS}:{mom.REF}\t{kid_ids[i]}\t'
             line += "\t".join(f"{vmc_fmt(x, tag)}" for x in [mom, dad, kid] for tag in dist_tags)
             line += "\t"
             line += "\t".join(f"{vmc_fmt(x, tag)}" for x in [mom, dad, kid] for tag in extra_tags)
@@ -157,7 +162,7 @@ def main(mom_vcf: pathlib.Path, dad_vcf: pathlib.Path, kid_vcfs:
             print(line, file=fh)
 
     fig = px.histogram(x=dists)
-    m = ["manhattan", "euclidean"][pow - 1]
+    m = ["manhattan", "euclidean"][power - 1]
     fig.update_layout(xaxis_range=[-1, 25], xaxis_title=f"{m}-distance between child and parent alleles ({','.join(dist_tags)})")
     fig.write_html(output_prefix + 'dists.html')
     print(f'wrote {output_prefix}dists.html and {output_prefix}dists.txt',
